@@ -74,11 +74,10 @@ public class PetsImpl implements Pets {
   @Override
   public void getPetsById(String id, String lang, Map<String, String> okapiHeaders, SingleObserver<Response> observer, Context vertxContext) {
     try {
-      vertxContext.runOnContext(v -> {
+      vertxContext.runOnContext(v ->
         runGetPetById(id)
-          .flatMap(this::constructGetByIdResponse)
-          .subscribe(observer);
-      });
+        .flatMap(this::constructGetByIdResponse)
+        .subscribe(observer));
     } catch (Exception e) {
       observer.onSuccess(GetPetsByIdResponse.respond500WithTextPlain(Response.Status.INTERNAL_SERVER_ERROR.getReasonPhrase()));
     }
@@ -93,12 +92,12 @@ public class PetsImpl implements Pets {
     try {
       return pgClient.save(PETS_TABLE_NAME, pet.getId(), pet);
     } catch (Exception e) {
-      return Single.error(e);
+      return Single.just(new Results<>());
     }
   }
 
   private Single<Response> constructPostResponse(Results<Pet> result) {
-    if (!result.getResults().isEmpty()) {
+    if (result.getResults() != null && !result.getResults().isEmpty()) {
       return Single.just(PostPetsResponse.respond201WithApplicationJson(result.getResults().get(0), PostPetsResponse.headersFor201()));
     }
     return Single.just(PostPetsResponse.respond500WithTextPlain(Response.Status.INTERNAL_SERVER_ERROR.getReasonPhrase()));
@@ -109,17 +108,20 @@ public class PetsImpl implements Pets {
       PgQuery query = queryBuilder.build();
       return pgClient.get(query.getTable(), Pet.class, query.getFields(), query.getCql(), true, false);
     } catch (Exception e) {
-      return Single.error(e);
+      return Single.just(new Results<>());
     }
   }
 
   private Single<Response> constructGetResponse(Results<Pet> results) {
-    List<Pet> petsList = results.getResults();
-    int totalRecords = petsList.size();
-    PetsCollection petsCollection = new PetsCollection();
-    petsCollection.setPets(petsList);
-    petsCollection.setTotalRecords(totalRecords);
-    return Single.just(GetPetsResponse.respond200WithApplicationJson(petsCollection));
+    if(results.getResults() != null) {
+      List<Pet> petsList = results.getResults();
+      int totalRecords = petsList.size();
+      PetsCollection petsCollection = new PetsCollection();
+      petsCollection.setPets(petsList);
+      petsCollection.setTotalRecords(totalRecords);
+      return Single.just(GetPetsResponse.respond200WithApplicationJson(petsCollection));
+    }
+    return Single.just(GetPetsResponse.respond500WithTextPlain(Response.Status.INTERNAL_SERVER_ERROR.getReasonPhrase()));
   }
 
   private Single<UpdateResult> updatePet(Pet pet) {
@@ -127,7 +129,7 @@ public class PetsImpl implements Pets {
       Criteria idCrit = constructCriteria("'id'", pet.getId());
       return pgClient.update(PETS_TABLE_NAME, pet, new Criterion(idCrit), true);
     } catch (Exception e) {
-      return Single.error(e);
+      return Single.just(new UpdateResult());
     }
   }
 
@@ -143,12 +145,14 @@ public class PetsImpl implements Pets {
       Criteria idCrit = constructCriteria("'id'", id);
       return pgClient.get(PETS_TABLE_NAME, Pet.class, new Criterion(idCrit), true, false);
     } catch (Exception e) {
-      return Single.error(e);
+      return Single.just(new Results<>());
     }
   }
 
   private Single<Response> constructGetByIdResponse(Results<Pet> results) {
-    if (results.getResults().isEmpty()) {
+    if(results.getResults() == null) {
+      return Single.just(GetPetsByIdResponse.respond500WithTextPlain(Response.Status.INTERNAL_SERVER_ERROR.getReasonPhrase()));
+    } else if (results.getResults().isEmpty()) {
       return Single.just(GetPetsByIdResponse.respond404WithTextPlain(Response.Status.NOT_FOUND.getReasonPhrase()));
     }
     return Single.just(GetPetsByIdResponse.respond200WithApplicationJson(results.getResults().get(0)));
