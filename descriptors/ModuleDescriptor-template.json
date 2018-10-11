@@ -9,28 +9,23 @@
       "handlers": [
         {
           "methods": ["GET"],
-          "pathPattern": "/pets",
-          "permissionsRequired": ["pets.collection.get"]
+          "pathPattern": "/pets"
         },
         {
           "methods": ["POST"],
-          "pathPattern": "/pets",
-          "permissionsRequired": ["pets.item.post"]
+          "pathPattern": "/pets"
         },
         {
           "methods": ["GET"],
-          "pathPattern": "/pets/{id}",
-          "permissionsRequired": ["pets.item.get"]
+          "pathPattern": "/pets/{id}"
         },
         {
           "methods": ["PUT"],
-          "pathPattern": "/pets/{id}",
-          "permissionsRequired": ["pets.item.put"]
+          "pathPattern": "/pets/{id}"
         },
         {
           "methods": ["DELETE"],
-          "pathPattern": "/pets/{id}",
-          "permissionsRequired": ["pets.item.delete"]
+          "pathPattern": "/pets/{id}"
         }
       ]
     },

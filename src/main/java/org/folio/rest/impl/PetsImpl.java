@@ -12,6 +12,7 @@ import org.folio.rest.persist.Criteria.Criteria;
 import org.folio.rest.persist.Criteria.Criterion;
 import org.folio.rest.persist.interfaces.Results;
 import org.folio.rest.utils.PgQuery;
+import org.folio.rest.utils.PgTransaction;
 import org.folio.rest.utils.PostgresClient;
 
 import javax.ws.rs.core.Response;
@@ -21,7 +22,8 @@ import java.util.UUID;
 
 public class PetsImpl implements Pets {
 
-  private static final String PETS_TABLE_NAME = "pets";
+  private static final String HOMELESS_PETS_TABLE_NAME = "homeless_pets";
+  private static final String ADOPTED_PETS_TABLE_NAME = "adopted_pets";
   private static final String[] ALL_FIELDS = {"*"};
 
   private final PostgresClient pgClient;
@@ -48,7 +50,7 @@ public class PetsImpl implements Pets {
   @Override
   public void getPets(String query, int offset, int limit, String lang, Map<String, String> okapiHeaders, SingleObserver<Response> observer, Context vertxContext) {
     try {
-      PgQuery.PgQueryBuilder queryBuilder = new PgQuery.PgQueryBuilder(ALL_FIELDS, PETS_TABLE_NAME).query(query).offset(offset).limit(limit);
+      PgQuery.PgQueryBuilder queryBuilder = new PgQuery.PgQueryBuilder(ALL_FIELDS, HOMELESS_PETS_TABLE_NAME).query(query).offset(offset).limit(limit);
       runGetQuery(queryBuilder)
         .flatMap(this::constructGetResponse)
         .subscribe(observer);
@@ -76,8 +78,8 @@ public class PetsImpl implements Pets {
     try {
       vertxContext.runOnContext(v ->
         runGetPetById(id)
-        .flatMap(this::constructGetByIdResponse)
-        .subscribe(observer));
+          .flatMap(this::constructGetByIdResponse)
+          .subscribe(observer));
     } catch (Exception e) {
       observer.onSuccess(GetPetsByIdResponse.respond500WithTextPlain(Response.Status.INTERNAL_SERVER_ERROR.getReasonPhrase()));
     }
@@ -88,9 +90,111 @@ public class PetsImpl implements Pets {
 
   }
 
+  @Override
+  public void getPetsAdoptById(String id, Map<String, String> okapiHeaders, SingleObserver<Response> observer, Context vertxContext) {
+
+  }
+
+  @Override
+  public void postPetsAdoptById(String id, Map<String, String> okapiHeaders, SingleObserver<Response> observer, Context vertxContext) {
+    try {
+      vertxContext.runOnContext(v -> {
+        Pet entity = new Pet();
+        entity.setId(id);
+        PgTransaction<Pet> pgTransaction = new PgTransaction<>(entity);
+        startTx(pgTransaction)
+          .flatMap(this::findPet)
+          .flatMap(this::vacateShelterPlace)
+          .flatMap(this::adoptPet)
+          .flatMap(this::endTx)
+          .flatMap(this::constructAdoptResponse)
+          .subscribe(observer);
+      });
+    } catch (Exception e) {
+      observer.onSuccess(PostPetsAdoptByIdResponse.respond500WithTextPlain(Response.Status.INTERNAL_SERVER_ERROR.getReasonPhrase()));
+    }
+  }
+
+  private Single<PgTransaction<Pet>> startTx(PgTransaction<Pet> tx) {
+    try {
+      tx.sqlConnection = pgClient.startTx().blockingGet();
+      return Single.just(tx);
+    } catch (Exception e) {
+      return Single.error(e);
+    }
+  }
+
+  private Single<PgTransaction<Pet>> findPet(PgTransaction<Pet> tx) {
+    try {
+      Criteria idCrit = constructCriteria("'id'", tx.entity.getId());
+      Results<Pet> results = pgClient.get(tx.sqlConnection, HOMELESS_PETS_TABLE_NAME, Pet.class, new Criterion(idCrit), true, false).blockingGet();
+      if (results.getResults().isEmpty()) {
+        tx.entity = null;
+      } else {
+        List<Pet> pets = results.getResults();
+        tx.entity.setGenus(pets.get(0).getGenus());
+        tx.entity.setQuantity(pets.get(0).getQuantity());
+      }
+      return Single.just(tx);
+    } catch (Exception e) {
+      return Single.error(e);
+    }
+  }
+
+  private Single<PgTransaction<Pet>> vacateShelterPlace(PgTransaction<Pet> tx) {
+    try {
+      if (tx.entity != null) {
+        Criteria idCrit = constructCriteria("'id'", tx.entity.getId());
+        UpdateResult result = pgClient.delete(tx.sqlConnection, HOMELESS_PETS_TABLE_NAME, new Criterion(idCrit)).blockingGet();
+        if (result.getUpdated() == 0) {
+          tx.entity = null;
+        }
+      }
+      return Single.just(tx);
+    } catch (Exception e) {
+      pgClient.rollbackTx(tx.sqlConnection);
+      return Single.error(e);
+    }
+  }
+
+  private Single<PgTransaction<Pet>> adoptPet(PgTransaction<Pet> tx) {
+    try {
+      if (tx.entity != null) {
+        Pet entity = new Pet();
+        entity.setGenus(tx.entity.getGenus());
+        entity.setQuantity(tx.entity.getQuantity());
+        Results<Pet> results = pgClient.save(tx.sqlConnection, ADOPTED_PETS_TABLE_NAME, entity).blockingGet();
+        if (!results.getResults().isEmpty()) {
+          entity.setId(results.getResults().get(0).getId());
+          tx.entity = entity;
+          return Single.just(tx);
+        } else {
+          pgClient.rollbackTx(tx.sqlConnection);
+          return Single.error(new RuntimeException("Couldn't adopt pet"));
+        }
+      }
+      return Single.just(tx);
+    } catch (Exception e) {
+      pgClient.rollbackTx(tx.sqlConnection);
+      return Single.error(e);
+    }
+  }
+
+  private Single<PgTransaction<Pet>> endTx(PgTransaction<Pet> tx) {
+    pgClient.endTx(tx.sqlConnection);
+    return Single.just(tx);
+  }
+
+  private Single<Response> constructAdoptResponse(PgTransaction<Pet> tx) {
+    if (tx.entity != null) {
+      return Single.just(PostPetsAdoptByIdResponse.respond201WithApplicationJson(tx.entity));
+    }
+    return Single.just(PostPetsAdoptByIdResponse.respond404WithTextPlain(Response.Status.NOT_FOUND.getReasonPhrase()));
+  }
+
   private Single<Results<Pet>> savePet(Pet pet) {
     try {
-      return pgClient.save(PETS_TABLE_NAME, pet.getId(), pet);
+      return pgClient.save(HOMELESS_PETS_TABLE_NAME, pet.getId(), pet);
     } catch (Exception e) {
       return Single.just(new Results<>());
     }
@@ -113,7 +217,7 @@ public class PetsImpl implements Pets {
   }
 
   private Single<Response> constructGetResponse(Results<Pet> results) {
-    if(results.getResults() != null) {
+    if (results.getResults() != null) {
       List<Pet> petsList = results.getResults();
       int totalRecords = petsList.size();
       PetsCollection petsCollection = new PetsCollection();
@@ -127,7 +231,7 @@ public class PetsImpl implements Pets {
   private Single<UpdateResult> updatePet(Pet pet) {
     try {
       Criteria idCrit = constructCriteria("'id'", pet.getId());
-      return pgClient.update(PETS_TABLE_NAME, pet, new Criterion(idCrit), true);
+      return pgClient.update(HOMELESS_PETS_TABLE_NAME, pet, new Criterion(idCrit), true);
     } catch (Exception e) {
       return Single.just(new UpdateResult());
     }
@@ -143,14 +247,14 @@ public class PetsImpl implements Pets {
   private Single<Results<Pet>> runGetPetById(String id) {
     try {
       Criteria idCrit = constructCriteria("'id'", id);
-      return pgClient.get(PETS_TABLE_NAME, Pet.class, new Criterion(idCrit), true, false);
+      return pgClient.get(HOMELESS_PETS_TABLE_NAME, Pet.class, new Criterion(idCrit), true, false);
     } catch (Exception e) {
       return Single.just(new Results<>());
     }
   }
 
   private Single<Response> constructGetByIdResponse(Results<Pet> results) {
-    if(results.getResults() == null) {
+    if (results.getResults() == null) {
       return Single.just(GetPetsByIdResponse.respond500WithTextPlain(Response.Status.INTERNAL_SERVER_ERROR.getReasonPhrase()));
     } else if (results.getResults().isEmpty()) {
       return Single.just(GetPetsByIdResponse.respond404WithTextPlain(Response.Status.NOT_FOUND.getReasonPhrase()));
@@ -172,5 +276,4 @@ public class PetsImpl implements Pets {
     criteria.setValue(value);
     return criteria;
   }
-
 }
